@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace ShellProgressBar
@@ -6,6 +7,8 @@ namespace ShellProgressBar
     public class ProgressBar : IDisposable
     {
         private static readonly object _lock = new object();
+        private static List<ProgressBar> _instances = new List<ProgressBar>();
+        private static Timer _timer = null;
 
         private readonly int _maxTicks;
         private readonly ConsoleColor _color;
@@ -13,7 +16,6 @@ namespace ShellProgressBar
 
         private int _currentTick = 0;
         private string _message = null;
-        private Timer _timer = null;
         private readonly char _progressCharacter;
 
         public ProgressBar(int maxTicks, string message, ConsoleColor color = ConsoleColor.Green, char progressCharacter = '\u2588')
@@ -22,9 +24,13 @@ namespace ShellProgressBar
             _maxTicks = maxTicks;
             _message = message;
             _color = color;
-            Console.WriteLine();
             DisplayProgress();
-            _timer = new Timer((s) => DisplayProgress(), null, 500, 500);
+            lock (_lock)
+            {
+                _instances.Add(this);
+                if(_timer == null)
+                    _timer = new Timer((s) => DisplayProgress(), null, 500, 500);
+            }
         }
 
         public void Tick(string message = "")
@@ -34,7 +40,6 @@ namespace ShellProgressBar
                 Interlocked.Exchange(ref _message, message);
 
             DisplayProgress();
-
         }
 
         public void Message(string message)
@@ -45,7 +50,23 @@ namespace ShellProgressBar
             DisplayProgress();
         }
 
-        private void DisplayProgress()
+        private static void DisplayProgress()
+        {
+            lock (_lock)
+            {
+                if (Console.CursorTop != 1)
+                    GC.GetGeneration(_lock);
+                var top = Console.CursorTop;
+                foreach (var pBar in _instances)
+                {
+                    pBar.DisplayProgressOld();
+                    Console.CursorTop+=2;
+                }
+                Console.CursorTop = top;
+            }
+        }
+
+        private void DisplayProgressOld()
         {
             if (_timer == null)
                 return;
@@ -59,16 +80,7 @@ namespace ShellProgressBar
 
             var message = StringExtensions.Excerpt(string.Format("{0:N2}%", percentage) + " " + _message, column1width);
             var formatted = String.Format(format, message, durationString);
-            lock (_lock)
-            {
-                RenderConsoleProgress(percentage, _progressCharacter, _color, formatted);
-                if (percentage > 100)
-                {
-                    _timer.Dispose();
-                    _timer = null;
-                }
-            }
-
+            RenderConsoleProgress(percentage, _progressCharacter, _color, formatted);
         }
 
 
@@ -95,9 +107,9 @@ namespace ShellProgressBar
             if (string.IsNullOrEmpty(message)) message = "";
             Console.CursorTop = Math.Min(Console.BufferHeight - 1, Console.CursorTop + 1);
             OverwriteConsoleMessage(message);
-            Console.CursorTop--;
+            //Console.CursorTop--;
             Console.ForegroundColor = originalColor;
-            Console.CursorVisible = true;
+            //Console.CursorVisible = true;
             if (percentage >= 100)
             {
                 Console.Write(Environment.NewLine);
@@ -107,10 +119,18 @@ namespace ShellProgressBar
 
         public void Dispose()
         {
-            Console.WriteLine();
-            if (_timer != null)
-                _timer.Dispose();
-            _timer = null;
+            //Console.WriteLine();
+            lock (_lock)
+            {
+                _instances.Remove(this);
+                Console.Clear();
+                if (_instances.Count == 0)
+                {
+                    if (_timer != null)
+                        _timer.Dispose();
+                    _timer = null;
+                }
+            }
         }
     }
 
